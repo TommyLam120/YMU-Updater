@@ -1,125 +1,102 @@
-# This workflow will install Python dependencies, run tests, build an executable then upload it to github releases
-
 name: YMU-SU Release
 
-on: 
+on:
   workflow_dispatch:
 
-
 jobs:
-
   build:
     runs-on: windows-latest
     name: Build YMU-SU
-    outputs:
-      full_sha: ${{ steps.var.outputs.full_sha }}
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pyinstaller requests bs4
-
-    - name: Verify With Flake8
-      run: |
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-
-    - name: Build Executable
-      run: |
-        pyinstaller ymu_self_updater.py --noconfirm --onefile --console --icon "./icon/ymu.ico"  
-
-    - name: Generate Build Info
-      id: var
-      run: |
-        echo "full_sha=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
-        echo "short_sha=$(git rev-parse --short HEAD)" >> $env:GITHUB_OUTPUT
-    
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: binary
-        path: |
-          dist\ymu_self_updater.exe
-
-  create_release:
-    runs-on: ubuntu-latest
-    name: Delete Old Release
-    needs: build
     steps:
       - uses: actions/checkout@v4
 
-      - name: Delete Old Release
-        id: delete_ex_release
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies from requirements file.
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyinstaller flake8
+
+      - name: Verify With Flake8
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Build Executable
+        run: |
+          pyinstaller ymu_self_updater.py --noconfirm --onefile --console --icon "./icon/ymu.ico"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ymu-updater-binary
+          path: dist/ymu_self_updater.exe
+
+  create_release:
+    runs-on: ubuntu-latest
+    name: Create Rolling "Latest" Release
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - name: Delete Old "Latest" Release and Tag
         uses: actions/github-script@v7
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const tag = "latest";
-      
-            // List all releases and find the release by tag
-            const releases = await github.rest.repos.listReleases({
-              owner: owner,
-              repo: repo,
-            });
 
-            const release = releases.data.find(release => release.tag_name === tag);
-      
-            // Check if the release exists and delete it
-            if (release) {
-              await github.rest.repos.deleteRelease({
-                owner: owner,
-                repo: repo,
-                release_id: release.id,
-              });
-              console.log(`Deleted release with ID ${release.id}`);
-            } else {
-              console.log("No existing release to delete");
-            }
-      
-            // Delete the tag
             try {
-              await github.rest.git.deleteRef({
-                owner: owner,
-                repo: repo,
-                ref: `tags/${tag}`,
-              });
-              console.log(`Deleted tag ${tag}`);
+              // Get the release associated with the 'latest' tag
+              const release = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+
+              // Delete the release
+              console.log(`Deleting release with ID ${release.data.id}`);
+              await github.rest.repos.deleteRelease({ owner, repo, release_id: release.data.id });
+
+              // Delete the tag ref
+              console.log(`Deleting tag ${tag}`);
+              await github.rest.git.deleteRef({ owner, repo, ref: `tags/${tag}` });
+
             } catch (error) {
-              console.error(`Error deleting tag: ${error.message}`);
+              if (error.status === 404) {
+                console.log("No existing 'latest' release or tag found. Proceeding to create a new one.");
+              } else {
+                console.error(`An error occurred: ${error.message}`);
+                throw error;
+              }
             }
 
       - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
-          name: binary
+          name: ymu-updater-binary
 
-        
-      - name: Echo build_sha256
+      - name: Calculate SHA256 Checksum
         id: build_sha
         run: |
           sha256sum ymu_self_updater.exe > sha256.checksum
-          echo "build_sha=$(cat sha256.checksum)" >> $GITHUB_OUTPUT
+          echo "checksum_val=$(awk '{ print $1 }' sha256.checksum)" >> $GITHUB_OUTPUT
           cat sha256.checksum
 
       - name: Upload Release
         uses: softprops/action-gh-release@v2
         with:
-          name: YMU-SU
+          name: YMU-SU (Latest)
           tag_name: latest
           body: |
+            **This is the latest automated build of the YMU Self-Updater.**
 
-              **This release has been built by Github Actions**
+            This executable is downloaded by YMU to perform self-updates.
 
-              [Link to build](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **SHA256 Checksum:**
+            `${{ steps.build_sha.outputs.checksum_val }}`
 
+            ---
+            *Built by [GitHub Actions](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*
           files: |
             ymu_self_updater.exe

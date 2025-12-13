@@ -1,121 +1,226 @@
-import atexit
-import logging
 import os
-import requests
-import shutil
 import sys
-from bs4  import BeautifulSoup
-from time import sleep
+import shutil
+import logging
+import requests
+import time
+import atexit
+
+API_URL = "https://api.github.com/repos/NiiV3AU/YMU/releases/latest"
 
 
-
-logfile = open("./ymu/ymu.log", "a")
-logfile.write("---Initializing YMU-Self Updater...\n\n")
-logfile.close()
-log = logging.getLogger("YMU-SU")
-logging.basicConfig(filename = './ymu/ymu.log',
-                    encoding = 'utf-8',
-                    level    = logging.DEBUG,
-                    format   = '%(asctime)s %(levelname)s %(name)s %(message)s',
-                    datefmt  = '%H:%M:%S'
-                    )
+def get_appdata_dir():
+    """Gets the path to the %APPDATA% directory."""
+    return os.getenv("APPDATA")
 
 
-def get_ymu_tag():
+def determine_paths():
+    """
+    Determines the correct paths for the YMU installation.
+    It checks for the new AppData path first, then falls back to the old relative path.
+    """
+    appdata_path = get_appdata_dir()
+    if not appdata_path:
+        return {
+            "log_dir": "./ymu",
+            "log_file": "./ymu/ymu.log",
+            "exe_path": "./ymu.exe",
+            "backup_dir": "./_backup",
+            "is_new_structure": False,
+        }
+
+    new_ymu_dir = os.path.join(appdata_path, "YMU")
+    current_dir_exe = os.path.join(os.getcwd(), "ymu.exe")
+
+    old_log_dir = "./ymu"
+
+    if os.path.isdir(new_ymu_dir) and os.path.isfile(current_dir_exe):
+        print("New directory structure detected.")
+        return {
+            "log_dir": new_ymu_dir,
+            "log_file": os.path.join(new_ymu_dir, "ymu.log"),
+            "exe_path": current_dir_exe,
+            "backup_dir": os.path.join(os.getcwd(), "_backup"),
+            "is_new_structure": True,
+        }
+    elif os.path.isdir(old_log_dir):
+        print("Old directory structure detected.")
+        return {
+            "log_dir": old_log_dir,
+            "log_file": os.path.join(old_log_dir, "ymu.log"),
+            "exe_path": "./ymu.exe",
+            "backup_dir": "./_backup",
+            "is_new_structure": False,
+        }
+    else:
+        print("No existing structure found. Assuming new installation.")
+        return {
+            "log_dir": new_ymu_dir,
+            "log_file": os.path.join(new_ymu_dir, "ymu.log"),
+            "exe_path": current_dir_exe,
+            "backup_dir": os.path.join(os.getcwd(), "_backup"),
+            "is_new_structure": True,
+        }
+
+
+PATHS = determine_paths()
+os.makedirs(PATHS["log_dir"], exist_ok=True)
+
+logging.basicConfig(
+    filename=PATHS["log_file"],
+    encoding="utf-8",
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)-8s] [YMU-SU] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+
+def get_latest_release_info():
+    """Fetches latest release info from the GitHub API."""
     try:
-        r = requests.get('https://github.com/NiiV3AU/YMU/tags')
-        soup = BeautifulSoup(r.content, 'html.parser')
-        result = soup.find(class_= 'Link--primary Link')
-        s = str(result)
-        result = s.replace('</a>', '')
-        charLength = len(result)
-        latest_version = result[charLength - 6:]
-        log.info(f'Latest YMU version: {latest_version}')
-        return latest_version   
-    except requests.exceptions.RequestException as e:
-       print(f'Failed to get the latest Github version. Check your Internet connection and try again.\nError message: {e}')
-       log.exception(f'Failed to get the latest Github version. Check your Internet connection and try again. Traceback: {e}')
+        log.info(f"Fetching release info from {API_URL}")
+        response = requests.get(API_URL, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        tag_name = data["tag_name"]
+        asset_url = None
+        for asset in data["assets"]:
+            if asset["name"].lower() == "ymu.exe":
+                asset_url = asset["browser_download_url"]
+                break
+
+        if not all([tag_name, asset_url]):
+            raise ValueError("Could not find tag_name or asset_url in API response.")
+
+        log.info(f"Latest YMU version: {tag_name}")
+        return tag_name, asset_url
+    except (requests.exceptions.RequestException, ValueError) as e:
+        print(
+            f"\nFailed to get the latest version from GitHub. Check your Internet connection.\nError: {e}"
+        )
+        log.exception("Failed to get latest release info.")
+        sys.exit(1)
 
 
-REM_VER = get_ymu_tag()
-EXE_URL = f'https://github.com/NiiV3AU/YMU/releases/download/{REM_VER}/ymu.exe'
-LOCAL_EXE = './ymu.exe'
+def display_banner():
+    os.system("cls" if os.name == "nt" else "clear")
+    print("\033[1;36;40m YMU Self-Updater\033[0m")
+    print("\033[1;32;40m https://github.com/NiiV3AU/YMU\033[0m\n\n")
 
 
-def banner():
- os.system("cls")
- print("            \033[1;36;40m YMU Updater")
- print("    \033[1;32;40m https://github.com/NiiV3AU/YMU\033[0m")
- print("\n\n") 
+def wait_for_file_release(filepath, timeout=10):
+    """Waits until the file is writable (process exited)."""
+    log.info(f"Waiting for {filepath} to be released...")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        try:
+            with open(filepath, "a+"):
+                pass
+            return True
+        except PermissionError:
+            time.sleep(0.5)
+        except IOError as e:
+            log.warning(f"Waiting for file release: {e}")
+            time.sleep(0.5)
+
+    return False
 
 
-def on_success():
-    log.info('Download finished.')
-    input(f'\n    YMU has been sucessfully updated to {REM_VER}. Press Enter to exit.')
-    # run the updated version
-    log.info(f'YMU has been sucessfully updated! Closing self updater and starting YMU {REM_VER}...\n\nFarewell!\n')
-    os.execvp('./ymu.exe', ['ymu'])
+def perform_update(version_tag, download_url):
+    """Handles the backup, download, and replacement of ymu.exe."""
+    exe_path = PATHS["exe_path"]
+    backup_dir = PATHS["backup_dir"]
+    backup_exe_path = os.path.join(backup_dir, "ymu.exe")
+
+    if not os.path.isfile(exe_path):
+        print(
+            f"\033[91mError: Main executable '{exe_path}' not found! Aborting.\033[0m"
+        )
+        log.error(f"Main executable '{exe_path}' not found. Cannot update.")
+        time.sleep(3)
+        return
+
+    if not wait_for_file_release(exe_path):
+        print("\033[91mError: Could not access ymu.exe. Is it still running?\033[0m")
+        log.error("Timeout waiting for file release.")
+        time.sleep(3)
+        sys.exit(1)
+
+    log.info(f"Backing up '{exe_path}' to '{backup_exe_path}'")
+    os.makedirs(backup_dir, exist_ok=True)
+    shutil.copy2(exe_path, backup_exe_path)
+
+    try:
+        log.info(f"Starting download from {download_url}")
+        with requests.get(download_url, stream=True) as r:
+            r.raise_for_status()
+            total_size = int(r.headers.get("content-length", 0))
+            downloaded_size = 0
+            with open(exe_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress = int((downloaded_size / total_size) * 100)
+                        print(
+                            f"\r  Downloading YMU {version_tag}: {progress} %",
+                            end="",
+                            flush=True,
+                        )
+        print("\n")
+        log.info("Download finished successfully.")
+
+    except (requests.exceptions.RequestException, IOError) as e:
+        print(f"\n\033[91mDownload failed: {e}\033[0m")
+        log.exception("Download failed. Reverting from backup.")
+
+        if os.path.isfile(backup_exe_path):
+            shutil.copy2(backup_exe_path, exe_path)
+            log.info("Restored from backup.")
+        else:
+            log.critical("Backup file missing! Cannot restore.")
+
+        sys.exit(1)
+
+    log.info("Update successful. Cleaning up backup.")
+    shutil.rmtree(backup_dir)
+
+    print(f"\n\033[1;32;40mYMU has been successfully updated to {version_tag}.\033[0m")
+    log.info(f"Update to {version_tag} complete. Launching new version.")
+    input("Press Enter to start the new version...")
+    os.execv(exe_path, [exe_path])
 
 
 def on_interrupt():
-    if os.path.exists('./_backup'):
-        if os.path.isfile('./_backup/ymu.exe'):
-            shutil.copy2('./_backup/ymu.exe', './')
-            os.remove('./_backup/ymu.exe')
-        os.removedirs('./_backup')
-    print('\n   \033[93mOperation canceled by the user. Reverting changes if any...\033[0m')
-    log.warning('Operation canceled by the user. Reverting changes if any...\n')
+    """Handles Ctrl+C to safely restore the backup."""
+    print("\n\033[93mOperation canceled by user. Reverting changes...\033[0m")
+    log.warning("Operation canceled by user.")
+    backup_exe_path = os.path.join(PATHS["backup_dir"], "ymu.exe")
+    if os.path.isfile(backup_exe_path):
+        try:
+            shutil.copy2(backup_exe_path, PATHS["exe_path"])
+            shutil.rmtree(PATHS["backup_dir"])
+            log.info("Successfully restored from backup.")
+        except Exception as e:
+            log.error(f"Failed to restore backup during interrupt: {e}")
+    sys.exit(0)
 
 
+def main():
+    """Main execution flow."""
+    log.info("--- YMU Self-Updater Initialized ---")
+    atexit.register(lambda: log.info("--- YMU Self-Updater Shutting Down ---\n"))
 
-def on_exit():
-    log.info('Farewell!\n')
+    display_banner()
+    version_tag, download_url = get_latest_release_info()
 
-
-def update_ymu():
-    banner()
     try:
-        if os.path.isfile('./ymu.exe'):
-            log.info('Found YMU executable')
-            if not os.path.exists('./_backup'):
-                os.makedirs('./_backup')
-                log.info('Creating backup folder...')
-            try:
-                shutil.copy2('./ymu.exe', './_backup')
-                log.info('Moving old YMU version into backup folder...')
-                with requests.get(EXE_URL, stream = True) as r:
-                    r.raise_for_status()
-                    total_size = int(r.headers.get("content-length", 0))
-                    log.info(f'Starting download...')
-                    log.info(f'Total size: {"{:.2f}".format(total_size/1048576)}MB')
-                    downloaded_size = 0
-                    with open(LOCAL_EXE, "wb") as f:
-                        for chunk in r.iter_content(chunk_size = 128000):  # 64 KB chunks
-                            f.write(chunk)
-                            downloaded_size += len(chunk)
-                            progress = downloaded_size / total_size * 100
-                            display_progress = int(progress)
-                            print("", end = f"\r    Downloading YMU {REM_VER}:   {display_progress} %", flush = True)
-                print("")
-            except requests.exceptions.RequestException as e:
-                print(f'    \033[91mFailed to download YMU. Check your Internet connection and try again.\nError message: {e}\033[0m')
-                #revert changes
-                shutil.copy2('./_backup/ymu.exe', './')
-                sys.exit(0)
-            # remove backup folder and its contents
-            os.remove('./_backup/ymu.exe')
-            os.removedirs('./_backup')
-            on_success()
-        else:
-            print("    \033[91m'ymu.exe' not found! Aborting operation in a few seconds...\033[0m")
-            log.error("'ymu.exe' not found! Aborting operation in a few seconds...")
-            sleep(3)
-            sys.exit(0)
+        perform_update(version_tag, download_url)
     except KeyboardInterrupt:
         on_interrupt()
 
 
-atexit.register(on_exit)
-
 if __name__ == "__main__":
-    update_ymu()
+    main()
