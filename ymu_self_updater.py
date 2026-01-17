@@ -6,7 +6,7 @@ import requests
 import time
 import atexit
 
-API_URL = "https://api.github.com/repos/NiiV3AU/YMU/releases/latest"
+API_URL = "https://api.github.com/repos/tommylam120/YMU/releases/latest"
 
 
 def get_appdata_dir():
@@ -107,7 +107,7 @@ def get_latest_release_info():
 def display_banner():
     os.system("cls" if os.name == "nt" else "clear")
     print("\033[1;36;40m YMU Self-Updater\033[0m")
-    print("\033[1;32;40m https://github.com/NiiV3AU/YMU\033[0m\n\n")
+    print("\033[1;32;40m https://github.com/tommylam120/YMU\033[0m\n\n")
 
 
 def wait_for_file_release(filepath, timeout=10):
