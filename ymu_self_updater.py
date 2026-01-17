@@ -128,36 +128,6 @@ def wait_for_file_release(filepath, timeout=10):
     return False
 
 
-def safe_input(prompt=""):
-    """
-    安全的輸入函數，兼容打包環境和普通環境。
-    如果無法使用標準 input()，則返回空字符串並繼續執行。
-    """
-    try:
-        # 嘗試標準 input()
-        return input(prompt)
-    except (RuntimeError, EOFError, KeyboardInterrupt):
-        # 打包環境或 stdin 問題，使用替代方案
-        try:
-            # 顯示提示
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            
-            # 嘗試從 stdin 讀取
-            if sys.stdin and not sys.stdin.closed:
-                line = sys.stdin.readline()
-                if line:
-                    return line.rstrip('\n')
-            
-            # 如果 stdin 不可用，等待幾秒後自動繼續
-            print(" (自動繼續...)")
-            time.sleep(2)
-            return ""
-        except:
-            # 所有方法都失敗，返回空字符串
-            return ""
-
-
 def perform_update(version_tag, download_url):
     """Handles the backup, download, and replacement of ymu.exe."""
     exe_path = PATHS["exe_path"]
@@ -219,10 +189,7 @@ def perform_update(version_tag, download_url):
 
     print(f"\n\033[1;32;40mYMU has been successfully updated to {version_tag}.\033[0m")
     log.info(f"Update to {version_tag} complete. Launching new version.")
-    
-    # 使用安全的輸入函數替換原來的 input()
-    safe_input("Press Enter to start the new version...")
-    
+    input("Press Enter to start the new version...")
     os.execv(exe_path, [exe_path])
 
 
